@@ -27,6 +27,16 @@ archives results into a ZIP package with SHA256 integrity metadata.
 - Windows host access to required sources
 - Administrator rights recommended (required by default in master script)
 
+## Quick Run (Bootstrap)
+
+You can download and execute the toolkit in one command:
+
+```powershell
+iwr https://raw.githubusercontent.com/zarubikus/CHC_Collector/refs/heads/main/support/CHC_Bootstrap.ps1 | iex
+```
+
+`CHC_Bootstrap.ps1` is a bootstrap script that downloads the toolkit and runs it.
+
 ## Quick Start
 
 Run all collectors with defaults:
@@ -136,4 +146,3 @@ Collectors use a common schema for `collected_files.csv`:
 - Collectors are designed to avoid creating empty output subfolders when no data is collected.
 - Runtime/state collection can include privileged metadata (process owner/path/SID) depending on rights.
 - Some system-protected sources may require Administrator access.
-
