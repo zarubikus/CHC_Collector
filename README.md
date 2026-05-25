@@ -37,6 +37,13 @@ iwr https://raw.githubusercontent.com/zarubikus/CHC_Collector/refs/heads/main/su
 
 `CHC_Bootstrap.ps1` is a bootstrap script that downloads the toolkit and runs it.
 
+
+The same command but executed from cmd.exe:
+
+```cmd.exe
+powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.com/zarubikus/CHC_Collector/refs/heads/main/support/CHC_Bootstrap.ps1 | iex"
+```
+
 ## Quick Start
 
 Run all collectors with defaults:
