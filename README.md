@@ -35,16 +35,16 @@ Run all collectors with defaults:
 .\CHC_Collector.ps1
 ```
 
-Run selected collectors:
+Run selected collectors with log output to console:
 
 ```powershell
-.\CHC_Collector.ps1 -Artifacts registry,evtx
+.\CHC_Collector.ps1 -Artifacts registry,evtx -ShowLg
 ```
 
 Run all and force runtime collector even if `-SourceRoot` is present:
 
 ```powershell
-.\CHC_Collector.ps1 -Artifacts all,runtime -SourceRoot D:\MountedImage
+.\CHC_Collector.ps1 -SourceRoot D:\MountedImage
 ```
 
 Show help for master and selected collectors:
