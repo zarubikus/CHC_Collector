@@ -29,7 +29,7 @@ archives results into a ZIP package with SHA256 integrity metadata.
 
 ## Quick Run (Bootstrap)
 
-You can download and execute the toolkit in one command:
+You can download and execute the toolkit in one command line using Powershell:
 
 ```powershell
 iwr https://raw.githubusercontent.com/zarubikus/CHC_Collector/refs/heads/main/support/CHC_Bootstrap.ps1 | iex
@@ -48,7 +48,7 @@ Run all collectors with defaults:
 Run selected collectors with log output to console:
 
 ```powershell
-.\CHC_Collector.ps1 -Artifacts registry,evtx -ShowLg
+.\CHC_Collector.ps1 -Artifacts registry,evtx -ShowLog
 ```
 
 Run all and force runtime collector even if `-SourceRoot` is present:
