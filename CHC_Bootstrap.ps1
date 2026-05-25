@@ -25,12 +25,22 @@ if (-not $ExpandedRoot) {
     throw "Could not find extracted repository root in $TempExtractPath"
 }
 
+# ZIP layout can be either:
+# 1) <repo-root>\CHC_Collector\...
+# 2) <repo-root>\...
+$NestedCollectorRoot = Join-Path $ExpandedRoot.FullName 'CHC_Collector'
+if (Test-Path -LiteralPath $NestedCollectorRoot) {
+    $SourceRoot = $NestedCollectorRoot
+} else {
+    $SourceRoot = $ExpandedRoot.FullName
+}
+
 if (-not (Test-Path -LiteralPath $TargetRoot)) {
     New-Item -Path $TargetRoot -ItemType Directory | Out-Null
 }
 
-Write-Host "[*] Copying files to $TargetRoot"
-Copy-Item -Path (Join-Path $ExpandedRoot.FullName 'CHC_Collector\*') -Destination $TargetRoot -Recurse -Force
+Write-Host "[*] Copying files from $SourceRoot to $TargetRoot"
+Copy-Item -Path (Join-Path $SourceRoot '*') -Destination $TargetRoot -Recurse -Force
 
 Remove-Item -LiteralPath $ZipPath -Force
 Remove-Item -LiteralPath $TempExtractPath -Recurse -Force
