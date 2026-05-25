@@ -1,0 +1,139 @@
+# CHC Collector
+
+CHC Collector is a PowerShell-based artifact collection framework for Windows.
+It runs modular sub-collectors, writes normalized file indexes, and optionally
+archives results into a ZIP package with SHA256 integrity metadata.
+
+## Highlights
+
+- Modular collector architecture (`collectors/*.ps1`)
+- Master runner with collector selection (`-Artifacts`)
+- Shared logging and optional console mirroring (`-ShowLog`)
+- Normalized file index format across collectors (`collected_files.csv`)
+- SHA256 hashing for collected artifacts
+- Optional archive packaging and archive SHA256 output
+
+## Repository Structure
+
+- `CHC_Collector.ps1`: Master script
+- `collectors/05_runtime.ps1`: Live runtime state (connections/processes JSON)
+- `collectors/10_registry.ps1`: Registry collection (offline or live)
+- `collectors/12_evtx.ps1`: Event log collection (offline or live)
+- `collectors/21_anydesk.ps1`: AnyDesk artifact collection
+
+## Requirements
+
+- Windows PowerShell 5.1+ (or PowerShell with Windows networking/registry cmdlets)
+- Windows host access to required sources
+- Administrator rights recommended (required by default in master script)
+
+## Quick Start
+
+Run all collectors with defaults:
+
+```powershell
+.\CHC_Collector.ps1
+```
+
+Run selected collectors:
+
+```powershell
+.\CHC_Collector.ps1 -Artifacts registry,evtx
+```
+
+Run all and force runtime collector even if `-SourceRoot` is present:
+
+```powershell
+.\CHC_Collector.ps1 -Artifacts all,runtime -SourceRoot D:\MountedImage
+```
+
+Show help for master and selected collectors:
+
+```powershell
+.\CHC_Collector.ps1 -Help -Artifacts runtime
+```
+
+## Master Script Options
+
+- `-MachineName <string>`: Override machine name used in output naming
+- `-SourceRoot <string>`: Offline source root for collectors that support offline mode
+- `-OutputRoot <string>`: Output root directory (default: `<repo>\output`)
+- `-Artifacts <list>`: Collector names (`all`, `runtime`, `registry`, `evtx`, `anydesk`)
+- `-Log <path>`: Shared log file path
+- `-ShowLog`: Print log lines to console
+- `-NoCleanup`: Preserve existing master ZIP/log and do not pass `-Cleanup` to collectors
+- `-NoArchive`: Skip ZIP packaging
+- `-NoAdminRequired`: Allow master execution without elevation
+- `-Help`: Show help and run sub-collector help
+
+## Collector Behavior
+
+### Runtime (`05_runtime.ps1`)
+
+- Produces:
+  - `runtime/connections.json`
+  - `runtime/processes.json`
+  - `collected_files.csv` entries for generated JSON artifacts
+- `-SourceRoot` handling:
+  - Skips by default when explicitly provided
+  - Supports `-Force` to run live anyway
+
+### Registry (`10_registry.ps1`)
+
+- Offline mode: when `-SourceRoot` is explicitly provided
+- Live mode: when `-SourceRoot` is not provided
+- Writes artifacts under `registry/...`
+- Appends collected file metadata to shared `collected_files.csv`
+
+### EVTX (`12_evtx.ps1`)
+
+- Offline mode: when `-SourceRoot` is explicitly provided
+- Live mode: when `-SourceRoot` is not provided
+- Live export path mirrors `evtx/Windows/System32/winevt/Logs/...`
+- Appends collected file metadata to shared `collected_files.csv`
+
+### AnyDesk (`21_anydesk.ps1`)
+
+- Collects from known AnyDesk locations (ProgramData, user profile paths, system profile, temp)
+- Appends discovered/collected file metadata to shared `collected_files.csv`
+
+## Output Layout
+
+Default output folder:
+
+`<repo>\output\<MachineName>-<yyyyMMdd>\`
+
+Typical contents:
+
+- Collector subfolders (`runtime`, `registry`, `evtx`, `anydesk`) when data exists
+- `collected_files.csv` (shared normalized file index)
+- `<MachineName>-<yyyyMMdd>_master.log` (default log path unless overridden)
+
+If archiving is enabled (default):
+
+- `<MachineName>-<yyyyMMdd>.zip`
+- `<MachineName>-<yyyyMMdd>.SHA256`
+
+## File Index Format
+
+Collectors use a common schema for `collected_files.csv`:
+
+- `Source Type`
+- `Full Original Path`
+- `Destination Path`
+- `File Created`
+- `File Modified`
+- `File Access`
+- `Size`
+- `Attributes`
+- `SHA256`
+- `Collected`
+- `Collection Method`
+- `Message`
+
+## Notes
+
+- Collectors are designed to avoid creating empty output subfolders when no data is collected.
+- Runtime/state collection can include privileged metadata (process owner/path/SID) depending on rights.
+- Some system-protected sources may require Administrator access.
+
