@@ -40,8 +40,8 @@
     "anydesk, registry". Names match collector filenames after the numeric
     prefix, so "registry" matches 10_registry.ps1 and "anydesk" matches
     21_anydesk.ps1. If omitted, all collectors are executed. If "all" is
-    specified, all collectors are executed. If "runtime" is explicitly listed,
-    the runtime collector is executed with -Force.
+    specified, all collectors are executed. If "runtime" or "winget" is
+    explicitly listed, that live collector is executed with -Force.
 
 .PARAMETER Log
     Shared master log path. If omitted, the default is
@@ -142,7 +142,8 @@ Arguments:
       Comma-separated collector artifact names to execute. Example:
       -Artifacts "anydesk, registry". If omitted, all collectors are executed.
       If "all" is specified, all collectors are executed. If "runtime" is
-      explicitly listed, runtime is executed with -Force.
+      explicitly listed, runtime is executed with -Force. If "winget" is
+      explicitly listed, winget is executed with -Force.
 
   -Log <string>
       Master/shared log path. Default:
@@ -334,7 +335,9 @@ function Get-CollectorParameters {
     }
 
     $requestedArtifacts = @(Get-RequestedArtifactNames)
-    if (($requestedArtifacts -contains "runtime") -and ((Get-ArtifactNameFromScript -ScriptName ([System.IO.Path]::GetFileName($ScriptPath))) -eq "runtime")) {
+    $artifactName = Get-ArtifactNameFromScript -ScriptName ([System.IO.Path]::GetFileName($ScriptPath))
+    if ((($requestedArtifacts -contains "runtime") -and ($artifactName -eq "runtime")) -or
+        (($requestedArtifacts -contains "winget") -and ($artifactName -eq "winget"))) {
         $collectorParams["Force"] = [switch]::Present
     }
 
