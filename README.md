@@ -30,9 +30,10 @@ archives results into a ZIP package with SHA256 integrity metadata.
 
 ## Quick Start - Bootstrap script
 
-You can download and execute the toolkit in one command line using Powershell:
+You can download and execute the toolkit in one command line using Powershell (as Administator):
 
 ```powershell
+Set-ExecutionPolicy Unrestricted -Scope LocalMachine
 iwr https://raw.githubusercontent.com/zarubikus/CHC_Collector/refs/heads/main/support/CHC_Bootstrap.ps1 | iex
 ```
 
