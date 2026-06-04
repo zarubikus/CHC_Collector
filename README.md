@@ -18,6 +18,7 @@ archives results into a ZIP package with SHA256 integrity metadata.
 - `CHC_Collector.ps1`: Master script
 - `collectors/05_runtime.ps1`: Live runtime state (connections/processes JSON)
 - `collectors/06_winget.ps1`: Live installed software and available updates
+- `collectors/07_license.ps1`: Live Windows license and embedded OEM key state
 - `collectors/10_registry.ps1`: Registry collection (offline or live)
 - `collectors/12_evtx.ps1`: Event log collection (offline or live)
 - `collectors/21_anydesk.ps1`: AnyDesk artifact collection
@@ -77,7 +78,7 @@ Show help for master and selected collectors:
 - `-MachineName <string>`: Override machine name used in output naming
 - `-SourceRoot <string>`: Offline source root for collectors that support offline mode
 - `-OutputRoot <string>`: Output root directory (default: `<repo>\output`)
-- `-Artifacts <list>`: Collector names (`all`, `runtime`, `winget`, `registry`, `evtx`, `anydesk`)
+- `-Artifacts <list>`: Collector names (`all`, `runtime`, `winget`, `license`, `registry`, `evtx`, `anydesk`)
 - `-Log <path>`: Shared log file path
 - `-ShowLog`: Print log lines to console
 - `-NoCleanup`: Preserve existing master ZIP/log and do not pass `-Cleanup` to collectors
@@ -117,6 +118,22 @@ Show help for master and selected collectors:
   - Supports `-Force` to run live anyway
 - The collector does not install modules, install software, or run upgrades
 
+### License (`07_license.ps1`)
+
+- Live-only collector for Windows licensing state
+- Produces:
+  - `license/license_status.json`
+  - `collected_files.csv` entry for the generated JSON artifact
+- Collection sources:
+  - `Win32_OperatingSystem`
+  - `SoftwareLicensingService`
+  - `SoftwareLicensingProduct`
+  - `OA3xOriginalProductKey` for embedded BIOS/UEFI OEM key when available
+- `-SourceRoot` handling:
+  - Skips by default when explicitly provided
+  - Supports `-Force` to run live anyway
+- The collector does not run activation commands or modify license state
+
 ### Registry (`10_registry.ps1`)
 
 - Offline mode: when `-SourceRoot` is explicitly provided
@@ -144,7 +161,7 @@ Default output folder:
 
 Typical contents:
 
-- Collector subfolders (`runtime`, `winget`, `registry`, `evtx`, `anydesk`) when data exists
+- Collector subfolders (`runtime`, `winget`, `license`, `registry`, `evtx`, `anydesk`) when data exists
 - `collected_files.csv` (shared normalized file index)
 - `<MachineName>-<yyyyMMdd>_master.log` (default log path unless overridden)
 
