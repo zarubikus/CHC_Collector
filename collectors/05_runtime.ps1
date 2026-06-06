@@ -522,12 +522,31 @@ function Add-RuntimeFileRecord {
 
 function Export-RuntimeFilesCsv {
     if ($RuntimeFileRecords.Count -gt 0) {
+        $recordsToWrite = @($RuntimeFileRecords)
+        if (Test-Path -LiteralPath $RuntimeFilesCsvPath -PathType Leaf) {
+            $existingRows = @(Import-Csv -Path $RuntimeFilesCsvPath -ErrorAction SilentlyContinue)
+            $recordsToWrite = @($RuntimeFileRecords | Where-Object {
+                $record = $_
+                $matches = @($existingRows | Where-Object {
+                    ($_."Source Type" -eq $record."Source Type") -and
+                    ($_."Full Original Path" -eq $record."Full Original Path") -and
+                    ($_."Destination Path" -eq $record."Destination Path")
+                } | Select-Object -First 1)
+                $matches.Count -eq 0
+            })
+        }
+
+        if ($recordsToWrite.Count -eq 0) {
+            Write-Log -Level "DEBUG" -Message "No new runtime rows to append to collected_files.csv."
+            return
+        }
+
         $csvExistsWithData = (Test-Path -LiteralPath $RuntimeFilesCsvPath -PathType Leaf) -and ((Get-Item -LiteralPath $RuntimeFilesCsvPath).Length -gt 0)
         if ($csvExistsWithData) {
-            $RuntimeFileRecords | ConvertTo-Csv -NoTypeInformation | Select-Object -Skip 1 | Add-Content -Path $RuntimeFilesCsvPath -Encoding UTF8
+            $recordsToWrite | ConvertTo-Csv -NoTypeInformation | Select-Object -Skip 1 | Add-Content -Path $RuntimeFilesCsvPath -Encoding UTF8
         }
         else {
-            $RuntimeFileRecords | Export-Csv -Path $RuntimeFilesCsvPath -NoTypeInformation -Encoding UTF8
+            $recordsToWrite | Export-Csv -Path $RuntimeFilesCsvPath -NoTypeInformation -Encoding UTF8
         }
     }
 }

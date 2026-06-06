@@ -641,12 +641,31 @@ function Export-LiveEventLogs {
 
 function Export-EventLogsCsv {
     if ($CollectedFileRecords.Count -gt 0) {
+        $recordsToWrite = @($CollectedFileRecords)
+        if (Test-Path -LiteralPath $FileCsvPath -PathType Leaf) {
+            $existingRows = @(Import-Csv -Path $FileCsvPath -ErrorAction SilentlyContinue)
+            $recordsToWrite = @($CollectedFileRecords | Where-Object {
+                $record = $_
+                $matches = @($existingRows | Where-Object {
+                    ($_."Source Type" -eq $record."Source Type") -and
+                    ($_."Full Original Path" -eq $record."Full Original Path") -and
+                    ($_."Destination Path" -eq $record."Destination Path")
+                } | Select-Object -First 1)
+                $matches.Count -eq 0
+            })
+        }
+
+        if ($recordsToWrite.Count -eq 0) {
+            Write-Log -Level "DEBUG" -Message "No new event log rows to append to collected_files.csv."
+            return
+        }
+
         $csvExistsWithData = (Test-Path -LiteralPath $FileCsvPath -PathType Leaf) -and ((Get-Item -LiteralPath $FileCsvPath).Length -gt 0)
         if ($csvExistsWithData) {
-            $CollectedFileRecords | Select-Object $FileCsvColumns | ConvertTo-Csv -NoTypeInformation | Select-Object -Skip 1 | Add-Content -Path $FileCsvPath -Encoding UTF8
+            $recordsToWrite | Select-Object $FileCsvColumns | ConvertTo-Csv -NoTypeInformation | Select-Object -Skip 1 | Add-Content -Path $FileCsvPath -Encoding UTF8
         }
         else {
-            $CollectedFileRecords | Select-Object $FileCsvColumns | Export-Csv -Path $FileCsvPath -NoTypeInformation -Encoding UTF8
+            $recordsToWrite | Select-Object $FileCsvColumns | Export-Csv -Path $FileCsvPath -NoTypeInformation -Encoding UTF8
         }
     }
 }

@@ -210,15 +210,32 @@ $FileCsvColumns = @(
     "Message"
 )
 
-function Export-RegistryFileCsv {
-    if ($CollectedFileRecords.Count -gt 0) {
-        $csvExistsWithData = (Test-Path -LiteralPath $FileCsvPath -PathType Leaf) -and ((Get-Item -LiteralPath $FileCsvPath).Length -gt 0)
-        if ($csvExistsWithData) {
-            $CollectedFileRecords | Select-Object $FileCsvColumns | ConvertTo-Csv -NoTypeInformation | Select-Object -Skip 1 | Add-Content -Path $FileCsvPath -Encoding UTF8
+function Add-RegistryCsvRecord {
+    param ([object]$Record)
+
+    if ($null -eq $Record) {
+        return
+    }
+
+    if (Test-Path -LiteralPath $FileCsvPath -PathType Leaf) {
+        $existingMatch = @(Import-Csv -Path $FileCsvPath -ErrorAction SilentlyContinue | Where-Object {
+            ($_."Source Type" -eq $Record."Source Type") -and
+            ($_."Full Original Path" -eq $Record."Full Original Path") -and
+            ($_."Destination Path" -eq $Record."Destination Path")
+        } | Select-Object -First 1)
+
+        if ($existingMatch.Count -gt 0) {
+            Write-Log -Level "DEBUG" -Message "Skipping duplicate collected_files.csv row for: $($Record.'Destination Path')"
+            return
         }
-        else {
-            $CollectedFileRecords | Select-Object $FileCsvColumns | Export-Csv -Path $FileCsvPath -NoTypeInformation -Encoding UTF8
-        }
+    }
+
+    $csvExistsWithData = (Test-Path -LiteralPath $FileCsvPath -PathType Leaf) -and ((Get-Item -LiteralPath $FileCsvPath).Length -gt 0)
+    if ($csvExistsWithData) {
+        $Record | Select-Object $FileCsvColumns | ConvertTo-Csv -NoTypeInformation | Select-Object -Skip 1 | Add-Content -Path $FileCsvPath -Encoding UTF8
+    }
+    else {
+        $Record | Select-Object $FileCsvColumns | Export-Csv -Path $FileCsvPath -NoTypeInformation -Encoding UTF8
     }
 }
 
@@ -280,7 +297,7 @@ function Add-RegistryFileRecord {
         [string]$Message = ""
     )
 
-    $script:CollectedFileRecords += [pscustomobject]@{
+    $record = [pscustomobject]@{
         "Source Type"        = $SourceType
         "Full Original Path" = $File.FullName
         "Destination Path"   = $DestinationPath
@@ -295,7 +312,8 @@ function Add-RegistryFileRecord {
         "Message"            = $Message
     }
 
-    Export-RegistryFileCsv
+    $script:CollectedFileRecords += $record
+    Add-RegistryCsvRecord -Record $record
 }
 
 function Get-RegistryFileSha256 {
@@ -545,7 +563,7 @@ function Add-LiveRegistryRecord {
         }
     }
 
-    $script:CollectedFileRecords += [pscustomobject]@{
+    $record = [pscustomobject]@{
         "Source Type"        = "Live Registry Hive"
         "Full Original Path" = $RegistryPath
         "Destination Path"   = $DestinationPath
@@ -560,7 +578,8 @@ function Add-LiveRegistryRecord {
         "Message"            = $Message
     }
 
-    Export-RegistryFileCsv
+    $script:CollectedFileRecords += $record
+    Add-RegistryCsvRecord -Record $record
 }
 
 function Format-RegistryToolMessage {
@@ -751,10 +770,6 @@ function Save-LiveRegistryHive {
     }
 }
 
-function Export-RegistryCsv {
-    Export-RegistryFileCsv
-}
-
 function Copy-OfflineRegistryFiles {
     if (-not $SourceRootSpecified) {
         Write-Log -Message "SourceRoot was not specified. Skipping offline registry hive file collection."
@@ -809,7 +824,6 @@ if ($SourceRootSpecified) {
 else {
     Save-LiveRegistryData
 }
-Export-RegistryCsv
 
 Write-Log -Message "Collection completed! Registry data is stored in: $RegistryOutputRoot"
 Write-Log -Message "Registry files collected/found: $(($CollectedFileRecords | Where-Object { $_.Collected -eq "Yes" }).Count)/$($CollectedFileRecords.Count)"

@@ -349,11 +349,30 @@ function Export-AnyDeskCsv {
     $csvExistsWithData = (Test-Path -LiteralPath $CsvPath -PathType Leaf) -and ((Get-Item -LiteralPath $CsvPath).Length -gt 0)
 
     if ($CollectedFileRecords.Count -gt 0) {
+        $recordsToWrite = @($CollectedFileRecords)
+        if (Test-Path -LiteralPath $CsvPath -PathType Leaf) {
+            $existingRows = @(Import-Csv -Path $CsvPath -ErrorAction SilentlyContinue)
+            $recordsToWrite = @($CollectedFileRecords | Where-Object {
+                $record = $_
+                $matches = @($existingRows | Where-Object {
+                    ($_."Source Type" -eq $record."Source Type") -and
+                    ($_."Full Original Path" -eq $record."Full Original Path") -and
+                    ($_."Destination Path" -eq $record."Destination Path")
+                } | Select-Object -First 1)
+                $matches.Count -eq 0
+            })
+        }
+
+        if ($recordsToWrite.Count -eq 0) {
+            Write-Log -Level "DEBUG" -Message "No new AnyDesk rows to append to collected_files.csv."
+            return
+        }
+
         if ($csvExistsWithData) {
-            $CollectedFileRecords | Select-Object $CsvColumns | ConvertTo-Csv -NoTypeInformation | Select-Object -Skip 1 | Add-Content -Path $CsvPath -Encoding UTF8
+            $recordsToWrite | Select-Object $CsvColumns | ConvertTo-Csv -NoTypeInformation | Select-Object -Skip 1 | Add-Content -Path $CsvPath -Encoding UTF8
         }
         else {
-            $CollectedFileRecords | Select-Object $CsvColumns | Export-Csv -Path $CsvPath -NoTypeInformation -Encoding UTF8
+            $recordsToWrite | Select-Object $CsvColumns | Export-Csv -Path $CsvPath -NoTypeInformation -Encoding UTF8
         }
     }
 }
