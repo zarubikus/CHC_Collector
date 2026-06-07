@@ -19,6 +19,7 @@ archives results into a ZIP package with SHA256 integrity metadata.
 - `collectors/05_runtime.ps1`: Live runtime state (connections/processes JSON)
 - `collectors/06_winget.ps1`: Live installed software and available updates
 - `collectors/07_license.ps1`: Live Windows license and embedded OEM key state
+- `collectors/08_hardware.ps1`: Live hardware inventory and serial numbers
 - `collectors/10_registry.ps1`: Registry collection (offline or live)
 - `collectors/12_evtx.ps1`: Event log collection (offline or live)
 - `collectors/21_anydesk.ps1`: AnyDesk artifact collection
@@ -78,7 +79,7 @@ Show help for master and selected collectors:
 - `-MachineName <string>`: Override machine name used in output naming
 - `-SourceRoot <string>`: Offline source root for collectors that support offline mode
 - `-OutputRoot <string>`: Output root directory (default: `<repo>\output`)
-- `-Artifacts <list>`: Collector names (`all`, `runtime`, `winget`, `license`, `registry`, `evtx`, `anydesk`)
+- `-Artifacts <list>`: Collector names (`all`, `runtime`, `winget`, `license`, `hardware`, `registry`, `evtx`, `anydesk`)
 - `-Log <path>`: Shared log file path
 - `-ShowLog`: Print log lines to console
 - `-NoCleanup`: Preserve existing master ZIP/log and do not pass `-Cleanup` to collectors
@@ -134,6 +135,32 @@ Show help for master and selected collectors:
   - Supports `-Force` to run live anyway
 - The collector does not run activation commands or modify license state
 
+### Hardware (`08_hardware.ps1`)
+
+- Live-only collector for hardware inventory and serial numbers
+- Produces:
+  - `hardware/hardware_info.json`
+  - `collected_files.csv` entry for the generated JSON artifact
+- Collection sources:
+  - `Win32_ComputerSystem`
+  - `Win32_OperatingSystem`
+  - `Win32_BIOS`
+  - `Win32_BaseBoard`
+  - `Win32_SystemEnclosure`
+  - `Win32_Processor`
+  - `Win32_PhysicalMemory`
+  - `Win32_DiskDrive`
+  - `Win32_LogicalDisk`
+  - `Win32_VideoController`
+  - `Win32_NetworkAdapter`
+  - `Win32_NetworkAdapterConfiguration`
+  - `Win32_PnPEntity`
+  - `Win32_Tpm` when available
+- `-SourceRoot` handling:
+  - Skips by default when explicitly provided
+  - Supports `-Force` to run live anyway
+- The collector does not modify hardware, firmware, or OS state
+
 ### Registry (`10_registry.ps1`)
 
 - Offline mode: when `-SourceRoot` is explicitly provided
@@ -161,7 +188,7 @@ Default output folder:
 
 Typical contents:
 
-- Collector subfolders (`runtime`, `winget`, `license`, `registry`, `evtx`, `anydesk`) when data exists
+- Collector subfolders (`runtime`, `winget`, `license`, `hardware`, `registry`, `evtx`, `anydesk`) when data exists
 - `collected_files.csv` (shared normalized file index)
 - `<MachineName>-<yyyyMMdd>_master.log` (default log path unless overridden)
 
