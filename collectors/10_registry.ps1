@@ -292,14 +292,19 @@ function Add-RegistryFileRecord {
         [string]$SourceType,
         [string]$DestinationPath,
         [string]$Collected,
+        [string]$FullOriginalPath = "",
         [string]$SHA256 = "",
         [string]$CollectionMethod = "",
         [string]$Message = ""
     )
 
+    if ([string]::IsNullOrWhiteSpace($FullOriginalPath)) {
+        $FullOriginalPath = $File.FullName
+    }
+
     $record = [pscustomobject]@{
         "Source Type"        = $SourceType
-        "Full Original Path" = $File.FullName
+        "Full Original Path" = $FullOriginalPath
         "Destination Path"   = $DestinationPath
         "File Created"       = $File.CreationTime
         "File Modified"      = $File.LastWriteTime
@@ -328,6 +333,17 @@ function Get-RegistryFileSha256 {
     catch {
         Write-Log -Level "WARN" -Message "Could not calculate SHA256 for ${Description}: $_"
         return ""
+    }
+}
+
+function Test-FileExistsSafe {
+    param ([string]$Path)
+
+    try {
+        return (Test-Path -LiteralPath $Path -PathType Leaf -ErrorAction Stop)
+    }
+    catch {
+        return $false
     }
 }
 
@@ -459,19 +475,25 @@ function Copy-RegistryFile {
     param (
         [System.IO.FileInfo]$File,
         [string]$SourceType,
-        [string]$DestinationRoot = $OfflineRegistryOutputRoot
+        [string]$DestinationRoot = $OfflineRegistryOutputRoot,
+        [string]$OriginalSourcePath = ""
     )
 
-    if ($script:SeenFilePaths.ContainsKey($File.FullName)) {
+    $sourceRecordPath = $File.FullName
+    if (-not [string]::IsNullOrWhiteSpace($OriginalSourcePath)) {
+        $sourceRecordPath = $OriginalSourcePath
+    }
+
+    if ($script:SeenFilePaths.ContainsKey($sourceRecordPath)) {
         return
     }
-    $script:SeenFilePaths[$File.FullName] = $true
+    $script:SeenFilePaths[$sourceRecordPath] = $true
 
     $sha256 = ""
     $collected = "No"
     $collectionMethod = ""
     $message = ""
-    $relativePath = Get-SourceRelativePath -SourcePath $File.FullName
+    $relativePath = Get-SourceRelativePath -SourcePath $sourceRecordPath
     $destPath = Join-Path $DestinationRoot $relativePath
     $destParent = Split-Path -Path $destPath -Parent
     if (-not (Test-Path -LiteralPath $destParent -PathType Container)) {
@@ -492,7 +514,7 @@ function Copy-RegistryFile {
         $sha256 = Get-RegistryFileSha256 -Path $destPath -Description $destPath
     }
 
-    Add-RegistryFileRecord -File $File -SourceType $SourceType -DestinationPath $destPath -Collected $collected -SHA256 $sha256 -CollectionMethod $collectionMethod -Message $message
+    Add-RegistryFileRecord -File $File -SourceType $SourceType -DestinationPath $destPath -Collected $collected -FullOriginalPath $sourceRecordPath -SHA256 $sha256 -CollectionMethod $collectionMethod -Message $message
 }
 
 function Copy-RegistryFilesFromPath {
@@ -520,6 +542,144 @@ function Copy-RegistryFilesFromPath {
         foreach ($pattern in $Include) {
             if ($file.Name -ilike $pattern) {
                 Copy-RegistryFile -File $file -SourceType $SourceType -DestinationRoot $DestinationRoot
+                break
+            }
+        }
+    }
+}
+
+function New-ShadowCopyContext {
+    param ([string]$Path)
+
+    $sourceFullPath = [System.IO.Path]::GetFullPath($Path)
+    $sourceRoot = [System.IO.Path]::GetPathRoot($sourceFullPath)
+    if ([string]::IsNullOrWhiteSpace($sourceRoot) -or ($sourceRoot -notmatch '^[a-zA-Z]:\\$')) {
+        return $null
+    }
+
+    try {
+        $createResult = Invoke-CimMethod -ClassName Win32_ShadowCopy -MethodName Create -Arguments @{
+            Volume  = $sourceRoot
+            Context = "ClientAccessible"
+        } -ErrorAction Stop
+
+        if ($createResult.ReturnValue -ne 0) {
+            Write-Log -Level "WARN" -Message "Could not create shadow copy for ${sourceRoot}: return value $($createResult.ReturnValue)"
+            return $null
+        }
+
+        $shadow = Get-CimInstance -ClassName Win32_ShadowCopy -ErrorAction Stop |
+            Where-Object { $_.ID -eq $createResult.ShadowID } |
+            Select-Object -First 1
+
+        if (-not $shadow) {
+            Write-Log -Level "WARN" -Message "Shadow copy was created for ${sourceRoot} but could not be found by ID $($createResult.ShadowID)"
+            return $null
+        }
+
+        return [pscustomobject]@{
+            SourceRoot   = $sourceRoot
+            SourcePrefix = $sourceRoot.TrimEnd('\') + '\'
+            ShadowId     = $shadow.ID
+            DeviceObject = $shadow.DeviceObject
+        }
+    }
+    catch {
+        Write-Log -Level "WARN" -Message "Could not create shadow copy for ${sourceRoot}: $_"
+        return $null
+    }
+}
+
+function Remove-ShadowCopyContext {
+    param ([object]$ShadowContext)
+
+    if ($null -eq $ShadowContext) {
+        return
+    }
+
+    $shadowId = $ShadowContext.ShadowId
+    try {
+        $shadowToDelete = Get-CimInstance -ClassName Win32_ShadowCopy -Filter "ID='$shadowId'" -ErrorAction Stop
+        if ($shadowToDelete) {
+            $shadowToDelete | Remove-CimInstance -ErrorAction Stop
+        }
+    }
+    catch {
+        try {
+            $wmiShadow = Get-WmiObject -Class Win32_ShadowCopy -Filter "ID='$shadowId'" -ErrorAction Stop
+            if ($wmiShadow) {
+                $deleteResult = $wmiShadow.Delete()
+                if ($deleteResult.ReturnValue -ne 0) {
+                    throw "WMI delete returned $($deleteResult.ReturnValue)."
+                }
+            }
+        }
+        catch {
+            Write-Log -Level "WARN" -Message "Could not delete shadow copy ${shadowId}: $_"
+        }
+    }
+}
+
+function Get-ShadowCopyPath {
+    param (
+        [object]$ShadowContext,
+        [string]$OriginalPath
+    )
+
+    if ($null -eq $ShadowContext) {
+        return ""
+    }
+
+    $originalFullPath = [System.IO.Path]::GetFullPath($OriginalPath)
+    if (-not $originalFullPath.StartsWith($ShadowContext.SourcePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return ""
+    }
+
+    $relativePath = $originalFullPath.Substring($ShadowContext.SourcePrefix.Length)
+    return Join-Path ($ShadowContext.DeviceObject + "\") $relativePath
+}
+
+function Copy-RegistryFilesFromShadowPath {
+    param (
+        [string]$SourcePath,
+        [object]$ShadowContext,
+        [string]$SourceType,
+        [string[]]$Include,
+        [string]$DestinationRoot = $OfflineRegistryOutputRoot,
+        [switch]$Recurse
+    )
+
+    $shadowSourcePath = Get-ShadowCopyPath -ShadowContext $ShadowContext -OriginalPath $SourcePath
+    if ([string]::IsNullOrWhiteSpace($shadowSourcePath)) {
+        Write-Log -Level "WARN" -Message "Could not map ${SourcePath} into shadow copy path."
+        return
+    }
+
+    try {
+        if (-not (Test-Path -LiteralPath $shadowSourcePath -PathType Container -ErrorAction Stop)) {
+            return
+        }
+    }
+    catch {
+        Write-Log -Level "WARN" -Message "Could not access shadow registry file source folder ${shadowSourcePath}: $_"
+        return
+    }
+
+    Write-Log -Message "Collecting registry files from shadow copy path $SourcePath"
+    $shadowPrefix = [System.IO.Path]::GetFullPath($shadowSourcePath).TrimEnd('\') + "\"
+    Get-ChildItem -LiteralPath $shadowSourcePath -File -Recurse:$Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
+        $file = $_
+        foreach ($pattern in $Include) {
+            if ($file.Name -ilike $pattern) {
+                $shadowFilePath = [System.IO.Path]::GetFullPath($file.FullName)
+                $relativeFilePath = if ($shadowFilePath.StartsWith($shadowPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $shadowFilePath.Substring($shadowPrefix.Length)
+                }
+                else {
+                    $file.Name
+                }
+                $originalFilePath = Join-Path $SourcePath $relativeFilePath
+                Copy-RegistryFile -File $file -SourceType $SourceType -DestinationRoot $DestinationRoot -OriginalSourcePath $originalFilePath
                 break
             }
         }
@@ -698,12 +858,34 @@ function Copy-UserProfileRegistryFiles {
 
     Write-IdentifiedProfileDebug -Mode $Mode -ProfileEntries $ProfileEntries
 
-    foreach ($profileEntry in $ProfileEntries) {
-        $profilePath = $profileEntry.Path
-        Copy-RegistryFilesFromPath -SourcePath $profilePath -SourceType "User Hive" -Include @("NTUSER.DAT", "NTUSER.DAT.*", "ntuser.ini")
+    $shadowContexts = @{}
+    try {
+        foreach ($profileEntry in $ProfileEntries) {
+            $profilePath = $profileEntry.Path
+            $usrClassPath = Join-Path $profilePath "AppData\Local\Microsoft\Windows"
 
-        $usrClassPath = Join-Path $profilePath "AppData\Local\Microsoft\Windows"
-        Copy-RegistryFilesFromPath -SourcePath $usrClassPath -SourceType "User Class Hive" -Include @("UsrClass.dat", "UsrClass.dat.*")
+            if ($Mode -eq "Live") {
+                $profileRoot = [System.IO.Path]::GetPathRoot(([System.IO.Path]::GetFullPath($profilePath)))
+                if (-not $shadowContexts.ContainsKey($profileRoot)) {
+                    $shadowContexts[$profileRoot] = New-ShadowCopyContext -Path $profilePath
+                }
+
+                $shadowContext = $shadowContexts[$profileRoot]
+                if ($null -ne $shadowContext) {
+                    Copy-RegistryFilesFromShadowPath -SourcePath $profilePath -ShadowContext $shadowContext -SourceType "User Hive" -Include @("NTUSER.DAT", "NTUSER.DAT.*", "ntuser.ini")
+                    Copy-RegistryFilesFromShadowPath -SourcePath $usrClassPath -ShadowContext $shadowContext -SourceType "User Class Hive" -Include @("UsrClass.dat", "UsrClass.dat.*")
+                    continue
+                }
+            }
+
+            Copy-RegistryFilesFromPath -SourcePath $profilePath -SourceType "User Hive" -Include @("NTUSER.DAT", "NTUSER.DAT.*", "ntuser.ini")
+            Copy-RegistryFilesFromPath -SourcePath $usrClassPath -SourceType "User Class Hive" -Include @("UsrClass.dat", "UsrClass.dat.*")
+        }
+    }
+    finally {
+        foreach ($shadowContext in $shadowContexts.Values) {
+            Remove-ShadowCopyContext -ShadowContext $shadowContext
+        }
     }
 }
 
@@ -738,7 +920,7 @@ function Save-LiveRegistryHive {
                 Remove-Item -LiteralPath $DestinationPath -Force -ErrorAction SilentlyContinue
             }
 
-            if ((-not [string]::IsNullOrWhiteSpace($SourceFilePath)) -and (Test-Path -LiteralPath $SourceFilePath -PathType Leaf)) {
+            if ((-not [string]::IsNullOrWhiteSpace($SourceFilePath)) -and (Test-FileExistsSafe -Path $SourceFilePath)) {
                 Write-Log -Level "WARN" -Message "Could not save live registry hive ${RegistryPath} with reg.exe: $message"
                 $fallbackResult = Copy-FileWithFallback -SourcePath $SourceFilePath -DestinationPath $DestinationPath
                 if ($fallbackResult.Success) {
