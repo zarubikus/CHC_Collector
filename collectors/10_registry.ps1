@@ -13,7 +13,8 @@
     transaction/log files from the supplied filesystem root and skips live
     collection. When -SourceRoot is not supplied, it attempts live registry
     collection using reg.exe save for selected HKLM hives and copies live user
-    profile registry hive files.
+    profile registry hive files. Both modes collect Amcache.hve and its sidecar
+    files from Windows\AppCompat\Programs.
 
     The collector creates a CSV index for copied registry files and live
     registry save attempts. The index includes source type, original path,
@@ -122,6 +123,8 @@ Technical collection logic:
       Patterns, case-insensitive: SAM, SECURITY, SOFTWARE, SYSTEM, DEFAULT,
       COMPONENTS, DRIVERS, BCD, and their sidecar files such as .LOG, .LOG1,
       .LOG2, .sav, .blf, and .regtrans-ms.
+    - Source: <SourceRoot>\Windows\AppCompat\Programs
+      Patterns, case-insensitive: Amcache.hve, Amcache.hve.*.
     - Source: <SourceRoot>\Users\<profile>
       Patterns, case-insensitive: NTUSER.DAT, NTUSER.DAT.*, ntuser.ini.
     - Source: <SourceRoot>\Users\<profile>\AppData\Local\Microsoft\Windows
@@ -136,6 +139,12 @@ Technical collection logic:
       temporary shadow copy of the source volume.
 
   Live registry collection, only when -SourceRoot is not specified:
+    - Copies Amcache.hve and Amcache.hve.* from
+      %SystemRoot%\AppCompat\Programs using one shadow copy for the hive/logs,
+      with normal file collection as a fallback. Stores them under
+      registry\Windows\AppCompat\Programs and records hashes in the CSV.
+    - Failed Amcache enumeration, snapshot creation, and file copies wait
+      30 seconds before each of up to three retries (four attempts total).
     - Uses reg.exe save to export:
       HKLM\SAM, HKLM\SECURITY, HKLM\SOFTWARE, HKLM\SYSTEM,
       HKLM\COMPONENTS, HKLM\DRIVERS.
@@ -890,6 +899,74 @@ function Save-LiveRegistryHive {
     }
     Add-LiveRegistryRecord -RegistryPath $RegistryPath -DestinationPath $DestinationPath -Collected "No" -Message $message -CollectionMethod "reg.exe save"
 }
+function Copy-AmcacheFiles {
+    param ([ValidateSet("Live", "Offline")][string]$Mode)
+
+    $windowsRoot = if ($Mode -eq "Live") { $env:SystemRoot } else { Join-Path $SourceRoot "Windows" }
+    $amcachePath = Join-Path $windowsRoot "AppCompat\Programs"
+    for ($attempt = 0; $attempt -le 3; $attempt++) {
+        try {
+            if (-not (Test-Path -LiteralPath $amcachePath -PathType Container -ErrorAction Stop)) {
+                Write-Log -Message "Amcache source folder is absent: $amcachePath"
+                return
+            }
+            $files = @(Get-ChildItem -LiteralPath $amcachePath -File -Force -ErrorAction Stop |
+                Where-Object { $_.Name -ieq "Amcache.hve" -or $_.Name -ilike "Amcache.hve.*" })
+            break
+        }
+        catch {
+            Write-Log -Level "WARN" -Message "Could not enumerate Amcache source ${amcachePath}: $_"
+            if ($attempt -eq 3) { return }
+            Write-Log -Level "WARN" -Message "Waiting 30 seconds before Amcache enumeration retry $($attempt + 1)/3."
+            Start-Sleep -Seconds 30
+        }
+    }
+    if ($files.Count -eq 0) {
+        Write-Log -Message "Amcache hive and sidecar files are absent: $amcachePath"
+        return
+    }
+    if (-not ($files | Where-Object { $_.Name -ieq "Amcache.hve" })) {
+        Write-Log -Level "WARN" -Message "Amcache hive is absent; collecting available sidecar files from $amcachePath"
+    }
+    Write-Log -Message "Collecting Amcache hive and sidecar files from $amcachePath ($Mode mode)"
+
+    $shadowContext = $null
+    try {
+        if ($Mode -eq "Live") {
+            for ($attempt = 0; $attempt -le 3; $attempt++) {
+                $shadowContext = New-ShadowCopyContext -Path $amcachePath
+                if ($null -ne $shadowContext) { break }
+                if ($attempt -lt 3) {
+                    Write-Log -Level "WARN" -Message "Waiting 30 seconds before Amcache shadow copy retry $($attempt + 1)/3."
+                    Start-Sleep -Seconds 30
+                }
+            }
+            if ($null -ne $shadowContext) {
+                try {
+                    $snapshotPath = Get-ShadowCopyPath -ShadowContext $shadowContext -OriginalPath $amcachePath
+                    # Read the hive and its logs from the same snapshot.
+                    $snapshotFiles = @(Get-ChildItem -LiteralPath $snapshotPath -File -Force -ErrorAction Stop |
+                        Where-Object { $_.Name -ieq "Amcache.hve" -or $_.Name -ilike "Amcache.hve.*" })
+                    if ($snapshotFiles.Count -eq 0) { throw "No Amcache files found in the snapshot." }
+                    foreach ($file in $snapshotFiles) {
+                        Copy-RegistryFile -File $file -SourceType "Amcache Hive" -OriginalSourcePath (Join-Path $amcachePath $file.Name)
+                    }
+                }
+                catch {
+                    Write-Log -Level "WARN" -Message "Could not collect Amcache from shadow copy; trying source files: $_"
+                }
+            }
+        }
+        # Successful snapshot files are deduplicated; failed ones remain eligible.
+        foreach ($file in $files) {
+            Copy-RegistryFile -File $file -SourceType "Amcache Hive"
+        }
+    }
+    finally {
+        Remove-ShadowCopyContext -ShadowContext $shadowContext
+    }
+}
+
 function Copy-OfflineRegistryFiles {
     if (-not $SourceRootSpecified) {
         Write-Log -Message "SourceRoot was not specified. Skipping offline registry hive file collection."
@@ -914,6 +991,7 @@ function Copy-OfflineRegistryFiles {
 
     $profileEntries = Get-OfflineUserProfilePaths
     Copy-UserProfileRegistryFiles -ProfileEntries $profileEntries -Mode "Offline"
+    Copy-AmcacheFiles -Mode "Offline"
 }
 
 function Save-LiveRegistryData {
@@ -935,6 +1013,7 @@ function Save-LiveRegistryData {
 
     $profileEntries = Get-LiveUserProfilePaths
     Copy-UserProfileRegistryFiles -ProfileEntries $profileEntries -Mode "Live"
+    Copy-AmcacheFiles -Mode "Live"
 }
 
 if ($SourceRootSpecified) {

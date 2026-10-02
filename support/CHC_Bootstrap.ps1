@@ -11,7 +11,7 @@ $TempExtractPath = Join-Path $CurrentDir "_${RepoName}_tmp"
 $TargetRoot = Join-Path $CurrentDir 'CHC_Collector'
 
 Write-Host "[*] Downloading $ZipUrl"
-Invoke-WebRequest -Uri $ZipUrl -OutFile $ZipPath
+Invoke-WebRequest -Uri $ZipUrl -OutFile $ZipPath -UseBasicParsing
 
 if (Test-Path -LiteralPath $TempExtractPath) {
     Remove-Item -LiteralPath $TempExtractPath -Recurse -Force
@@ -51,4 +51,5 @@ if (-not (Test-Path -LiteralPath $MasterScript)) {
 }
 
 Write-Host "[*] Running $MasterScript"
-& $MasterScript
+# Show the collector's archive path, SHA256 file path, and any collection/archive warnings.
+& $MasterScript -ShowLog

@@ -36,16 +36,22 @@ You can download and execute the toolkit in one command line using Powershell (a
 
 ```powershell
 Set-ExecutionPolicy Unrestricted -Scope LocalMachine
-iwr https://raw.githubusercontent.com/zarubikus/CHC_Collector/refs/heads/main/support/CHC_Bootstrap.ps1 | iex
+Set-Location C:\DFIR
+iwr -UseBasicParsing https://raw.githubusercontent.com/zarubikus/CHC_Collector/refs/heads/main/support/CHC_Bootstrap.ps1 | iex
 ```
 
 `CHC_Bootstrap.ps1` is a bootstrap script that downloads the toolkit and runs it.
+It downloads and extracts into the current working folder, then runs the copy under `<working folder>\CHC_Collector`. Choose an existing working folder before executing the command.
+The bootstrap runs the collector with `-ShowLog`, so the console displays the full ZIP archive path and SHA256 file path when created, as well as collection or archive failure warnings.
+
+`support\CHC_Bootstrap.bat` preserves the caller's working folder. If elevation starts it in `%SystemRoot%\System32` or `%SystemRoot%\SysWOW64`, it uses the batch file's folder instead. For example, launching `C:\DFIR\CHC_Collector\support\CHC_Bootstrap.bat` this way places the downloaded copy in `C:\DFIR\CHC_Collector\support\CHC_Collector`. To download into `C:\DFIR\CHC_Collector`, first open an elevated terminal, change its working folder to `C:\DFIR`, and launch the batch file from there.
 
 
 The same command but executed from cmd.exe:
 
 ```cmd.exe
-powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.com/zarubikus/CHC_Collector/refs/heads/main/support/CHC_Bootstrap.ps1 | iex"
+cd /d C:\DFIR
+powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing https://raw.githubusercontent.com/zarubikus/CHC_Collector/refs/heads/main/support/CHC_Bootstrap.ps1 | iex"
 ```
 
 ## Quick Start - Local Copy
@@ -168,6 +174,7 @@ Show help for master and selected collectors:
 - Writes artifacts under `registry/...`
 - Appends collected file metadata to shared `collected_files.csv`
 - Collects `NTUSER.DAT`, `UsrClass.dat`, their sidecar files, and `ntuser.ini` from user and service profiles. Live profiles use a temporary link to a shadow copy, with normal file collection as a fallback.
+- Collects `Amcache.hve` and `Amcache.hve.*` (including transaction logs) from `Windows\AppCompat\Programs` in both modes, preserving that path under `registry/`. Live collection first uses one shadow copy for the hive and logs, then falls back for unsuccessful files. SHA256 hashes and collection results are included in `collected_files.csv`; absent files and access failures are logged separately.
 - Failed registry file copies and `reg.exe save` exports wait 30 seconds before each of up to three retries (four attempts total). Failed exports then try copying the source hive.
 - The main runner also retries collectors that report unsuccessful execution or throw an error, with the same delay and limit.
 
