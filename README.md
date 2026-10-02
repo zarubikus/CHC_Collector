@@ -4,6 +4,19 @@ CHC Collector is a PowerShell-based artifact collection framework for Windows.
 It runs modular sub-collectors, writes normalized file indexes, and optionally
 archives results into a ZIP package with SHA256 integrity metadata.
 
+## Purpose
+
+CHC Collector collects evidence files offline for automated digital forensics and
+incident response (DFIR) processing. Its purpose is to prepare evidence for
+cyber investigations, incident analysis, compliance checks, and security audits.
+Collected files, normalized indexes, and SHA256 integrity metadata provide inputs
+for downstream automated analysis workflows.
+
+Collection can run without network access using a local copy or the bundled EXE.
+Collectors that support offline sources can also collect from a mounted Windows
+image through `-SourceRoot`. Live collectors capture additional system state
+when run on a Windows host; optional online checks require network access.
+
 ## Highlights
 
 - Modular collector architecture (`collectors/*.ps1`)
