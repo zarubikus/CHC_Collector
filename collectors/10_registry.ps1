@@ -348,88 +348,21 @@ function Test-FileExistsSafe {
 }
 
 function Copy-FileWithShadowCopy {
-    param (
-        [string]$SourcePath,
-        [string]$DestinationPath
-    )
-
-    $sourceFullPath = [System.IO.Path]::GetFullPath($SourcePath)
-    $sourceRoot = [System.IO.Path]::GetPathRoot($sourceFullPath)
-    if ([string]::IsNullOrWhiteSpace($sourceRoot) -or ($sourceRoot -notmatch '^[a-zA-Z]:\\$')) {
-        return [pscustomobject]@{
-            Success = $false
-            Message = "Shadow copy fallback supports local drive paths only."
-        }
-    }
-
-    $shadow = $null
+    param ([string]$SourcePath, [string]$DestinationPath)
+    $context = $null
     try {
-        $createResult = Invoke-CimMethod -ClassName Win32_ShadowCopy -MethodName Create -Arguments @{
-            Volume  = $sourceRoot
-            Context = "ClientAccessible"
-        } -ErrorAction Stop
-
-        if ($createResult.ReturnValue -ne 0) {
-            return [pscustomobject]@{
-                Success = $false
-                Message = "Shadow copy creation failed with return value $($createResult.ReturnValue)."
-            }
-        }
-
-        $shadow = Get-CimInstance -ClassName Win32_ShadowCopy -ErrorAction Stop |
-            Where-Object { $_.ID -eq $createResult.ShadowID } |
-            Select-Object -First 1
-
-        if (-not $shadow) {
-            return [pscustomobject]@{
-                Success = $false
-                Message = "Shadow copy was created but could not be found by ID $($createResult.ShadowID)."
-            }
-        }
-
-        $relativePath = $sourceFullPath.Substring($sourceRoot.Length)
-        $shadowSourcePath = Join-Path ($shadow.DeviceObject + "\") $relativePath
-        Copy-Item -LiteralPath $shadowSourcePath -Destination $DestinationPath -Force -ErrorAction Stop
-
-        return [pscustomobject]@{
-            Success = $true
-            Message = "Copied from shadow copy $($shadow.ID)."
-        }
+        $context = New-ShadowCopyContext -Path $SourcePath
+        if ($null -eq $context) { throw 'Could not create an accessible shadow copy.' }
+        $shadowPath = Get-ShadowCopyPath -ShadowContext $context -OriginalPath $SourcePath
+        Copy-Item -LiteralPath $shadowPath -Destination $DestinationPath -Force -ErrorAction Stop
+        return [pscustomobject]@{ Success = $true; Message = "Copied from shadow copy $($context.ShadowId)." }
     }
     catch {
-        return [pscustomobject]@{
-            Success = $false
-            Message = "Shadow copy fallback failed: $_"
-        }
+        return [pscustomobject]@{ Success = $false; Message = "Shadow copy fallback failed: $_" }
     }
-    finally {
-        if ($shadow) {
-            $shadowId = $shadow.ID
-            try {
-                $shadowToDelete = Get-CimInstance -ClassName Win32_ShadowCopy -Filter "ID='$shadowId'" -ErrorAction Stop
-                if ($shadowToDelete) {
-                    $shadowToDelete | Remove-CimInstance -ErrorAction Stop
-                }
-            }
-            catch {
-                try {
-                    $wmiShadow = Get-WmiObject -Class Win32_ShadowCopy -Filter "ID='$shadowId'" -ErrorAction Stop
-                    if ($wmiShadow) {
-                        $deleteResult = $wmiShadow.Delete()
-                        if ($deleteResult.ReturnValue -ne 0) {
-                            throw "WMI delete returned $($deleteResult.ReturnValue)."
-                        }
-                    }
-                }
-                catch {
-                    Write-Log -Level "WARN" -Message "Could not delete shadow copy ${shadowId}: $_"
-                }
-            }
-        }
-    }
+    finally { Remove-ShadowCopyContext -ShadowContext $context }
 }
-
-function Copy-FileWithFallback {
+function Copy-FileWithFallbackAttempt {
     param (
         [string]$SourcePath,
         [string]$DestinationPath
@@ -471,6 +404,20 @@ function Copy-FileWithFallback {
     }
 }
 
+function Copy-FileWithFallback {
+    param ([string]$SourcePath, [string]$DestinationPath)
+    for ($attempt = 0; $attempt -le 3; $attempt++) {
+        try { $result = Copy-FileWithFallbackAttempt -SourcePath $SourcePath -DestinationPath $DestinationPath }
+        catch { $result = [pscustomobject]@{ Success = $false; Method = ""; Message = "$_" } }
+        if ($result.Success) { return $result }
+        if ($attempt -lt 3) {
+            Write-Log -Level "WARN" -Message "Collection failed for ${SourcePath}: $($result.Message) Waiting 30 seconds before retry $($attempt + 1)/3."
+            Start-Sleep -Seconds 30
+        }
+    }
+    return $result
+}
+
 function Copy-RegistryFile {
     param (
         [System.IO.FileInfo]$File,
@@ -487,7 +434,7 @@ function Copy-RegistryFile {
     if ($script:SeenFilePaths.ContainsKey($sourceRecordPath)) {
         return
     }
-    $script:SeenFilePaths[$sourceRecordPath] = $true
+
 
     $sha256 = ""
     $collected = "No"
@@ -511,6 +458,7 @@ function Copy-RegistryFile {
     }
 
     if ($collected -eq "Yes") {
+        $script:SeenFilePaths[$sourceRecordPath] = $true
         $sha256 = Get-RegistryFileSha256 -Path $destPath -Description $destPath
     }
 
@@ -557,6 +505,8 @@ function New-ShadowCopyContext {
         return $null
     }
 
+    $shadow = $null
+    $mountPath = ""
     try {
         $createResult = Invoke-CimMethod -ClassName Win32_ShadowCopy -MethodName Create -Arguments @{
             Volume  = $sourceRoot
@@ -577,15 +527,23 @@ function New-ShadowCopyContext {
             return $null
         }
 
+        $mountPath = Join-Path $RegistryOutputRoot (".shadow-" + [guid]::NewGuid().ToString('N'))
+        # Expose GLOBALROOT through a link supported by Windows PowerShell's file provider.
+        $linkOutput = & cmd.exe /d /c "mklink /d `"$mountPath`" `"$($shadow.DeviceObject)\`"" 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "Could not expose shadow copy: $($linkOutput -join ' ')" }
         return [pscustomobject]@{
             SourceRoot   = $sourceRoot
             SourcePrefix = $sourceRoot.TrimEnd('\') + '\'
             ShadowId     = $shadow.ID
             DeviceObject = $shadow.DeviceObject
+            MountPath    = $mountPath
         }
     }
     catch {
         Write-Log -Level "WARN" -Message "Could not create shadow copy for ${sourceRoot}: $_"
+        if ($shadow) {
+            Remove-ShadowCopyContext -ShadowContext ([pscustomobject]@{ ShadowId = $shadow.ID; MountPath = $mountPath })
+        }
         return $null
     }
 }
@@ -597,6 +555,10 @@ function Remove-ShadowCopyContext {
         return
     }
 
+    if ($ShadowContext.MountPath -and [IO.Directory]::Exists($ShadowContext.MountPath)) {
+        try { [IO.Directory]::Delete($ShadowContext.MountPath) } # Remove only the link; never recurse.
+        catch { Write-Log -Level "WARN" -Message "Could not remove shadow copy link: $_" }
+    }
     $shadowId = $ShadowContext.ShadowId
     try {
         $shadowToDelete = Get-CimInstance -ClassName Win32_ShadowCopy -Filter "ID='$shadowId'" -ErrorAction Stop
@@ -636,7 +598,7 @@ function Get-ShadowCopyPath {
     }
 
     $relativePath = $originalFullPath.Substring($ShadowContext.SourcePrefix.Length)
-    return Join-Path ($ShadowContext.DeviceObject + "\") $relativePath
+    return Join-Path $ShadowContext.MountPath $relativePath
 }
 
 function Copy-RegistryFilesFromShadowPath {
@@ -874,7 +836,7 @@ function Copy-UserProfileRegistryFiles {
                 if ($null -ne $shadowContext) {
                     Copy-RegistryFilesFromShadowPath -SourcePath $profilePath -ShadowContext $shadowContext -SourceType "User Hive" -Include @("NTUSER.DAT", "NTUSER.DAT.*", "ntuser.ini")
                     Copy-RegistryFilesFromShadowPath -SourcePath $usrClassPath -ShadowContext $shadowContext -SourceType "User Class Hive" -Include @("UsrClass.dat", "UsrClass.dat.*")
-                    continue
+
                 }
             }
 
@@ -890,68 +852,44 @@ function Copy-UserProfileRegistryFiles {
 }
 
 function Save-LiveRegistryHive {
-    param (
-        [string]$RegistryPath,
-        [string]$DestinationPath,
-        [string]$SourceFilePath = ""
-    )
-
+    param ([string]$RegistryPath, [string]$DestinationPath, [string]$SourceFilePath = "")
     $destParent = Split-Path -Path $DestinationPath -Parent
-    if (-not (Test-Path -LiteralPath $destParent -PathType Container)) {
-        New-Item -ItemType Directory -Path $destParent -Force | Out-Null
-    }
-
-    try {
-        $output = & reg.exe save $RegistryPath $DestinationPath /y 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            $sha256 = ""
-            try {
-                $sha256 = (Get-FileHash -LiteralPath $DestinationPath -Algorithm SHA256 -ErrorAction Stop).Hash
+    New-Item -ItemType Directory -Path $destParent -Force -ErrorAction Stop | Out-Null
+    $message = ""
+    for ($attempt = 0; $attempt -le 3; $attempt++) {
+        try {
+            $output = & reg.exe save $RegistryPath $DestinationPath /y 2>&1
+            if ($LASTEXITCODE -ne 0) { throw (Format-RegistryToolMessage -Message ($output -join ' ')) }
+            if (-not (Test-Path -LiteralPath $DestinationPath -PathType Leaf) -or (Get-Item -LiteralPath $DestinationPath).Length -eq 0) {
+                throw 'reg.exe did not produce a nonempty hive file.'
             }
-            catch {
-                Write-Log -Level "WARN" -Message "Could not calculate SHA256 for live registry hive $DestinationPath`: $_"
-            }
-
-            Add-LiveRegistryRecord -RegistryPath $RegistryPath -DestinationPath $DestinationPath -Collected "Yes" -SHA256 $sha256 -Message ($output -join " ") -CollectionMethod "reg.exe save"
+            $sha256 = Get-RegistryFileSha256 -Path $DestinationPath -Description $DestinationPath
+            Add-LiveRegistryRecord -RegistryPath $RegistryPath -DestinationPath $DestinationPath -Collected "Yes" -SHA256 $sha256 -Message ($output -join ' ') -CollectionMethod "reg.exe save"
+            return
         }
-        else {
-            $message = Format-RegistryToolMessage -Message ($output -join " ")
+        catch {
+            $message = "$_"
             if (Test-Path -LiteralPath $DestinationPath -PathType Leaf) {
                 Remove-Item -LiteralPath $DestinationPath -Force -ErrorAction SilentlyContinue
             }
-
-            if ((-not [string]::IsNullOrWhiteSpace($SourceFilePath)) -and (Test-FileExistsSafe -Path $SourceFilePath)) {
-                Write-Log -Level "WARN" -Message "Could not save live registry hive ${RegistryPath} with reg.exe: $message"
-                $fallbackResult = Copy-FileWithFallback -SourcePath $SourceFilePath -DestinationPath $DestinationPath
-                if ($fallbackResult.Success) {
-                    $sha256 = ""
-                    try {
-                        $sha256 = (Get-FileHash -LiteralPath $DestinationPath -Algorithm SHA256 -ErrorAction Stop).Hash
-                    }
-                    catch {
-                        Write-Log -Level "WARN" -Message "Could not calculate SHA256 for live registry hive $DestinationPath`: $_"
-                    }
-
-                    Add-LiveRegistryRecord -RegistryPath $RegistryPath -DestinationPath $DestinationPath -Collected "Yes" -SHA256 $sha256 -Message "reg.exe save failed: $message Fallback method: $($fallbackResult.Method). $($fallbackResult.Message)" -CollectionMethod $fallbackResult.Method
-                    return
-                }
-
-                $message = "$message Fallback copy failed: $($fallbackResult.Message)"
-            }
-
             Write-Log -Level "WARN" -Message "Could not save live registry hive ${RegistryPath}: $message"
-            Add-LiveRegistryRecord -RegistryPath $RegistryPath -DestinationPath $DestinationPath -Collected "No" -Message $message -CollectionMethod "reg.exe save"
+            if ($attempt -lt 3) {
+                Write-Log -Level "WARN" -Message "Waiting 30 seconds before registry export retry $($attempt + 1)/3."
+                Start-Sleep -Seconds 30
+            }
         }
     }
-    catch {
-        if (Test-Path -LiteralPath $DestinationPath -PathType Leaf) {
-            Remove-Item -LiteralPath $DestinationPath -Force -ErrorAction SilentlyContinue
+    if ((-not [string]::IsNullOrWhiteSpace($SourceFilePath)) -and (Test-FileExistsSafe -Path $SourceFilePath)) {
+        $fallbackResult = Copy-FileWithFallback -SourcePath $SourceFilePath -DestinationPath $DestinationPath
+        if ($fallbackResult.Success) {
+            $sha256 = Get-RegistryFileSha256 -Path $DestinationPath -Description $DestinationPath
+            Add-LiveRegistryRecord -RegistryPath $RegistryPath -DestinationPath $DestinationPath -Collected "Yes" -SHA256 $sha256 -Message "reg.exe save failed: $message Fallback: $($fallbackResult.Message)" -CollectionMethod $fallbackResult.Method
+            return
         }
-        Write-Log -Level "WARN" -Message "Could not save live registry hive ${RegistryPath}: $_"
-        Add-LiveRegistryRecord -RegistryPath $RegistryPath -DestinationPath $DestinationPath -Collected "No" -Message $_ -CollectionMethod "reg.exe save"
+        $message = "$message Fallback copy failed: $($fallbackResult.Message)"
     }
+    Add-LiveRegistryRecord -RegistryPath $RegistryPath -DestinationPath $DestinationPath -Collected "No" -Message $message -CollectionMethod "reg.exe save"
 }
-
 function Copy-OfflineRegistryFiles {
     if (-not $SourceRootSpecified) {
         Write-Log -Message "SourceRoot was not specified. Skipping offline registry hive file collection."

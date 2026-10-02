@@ -450,15 +450,23 @@ if ((Get-RequestedArtifactNames).Count -gt 0) {
 # ===== EXECUTE SCRIPTS =====
 foreach ($script in $scriptFiles) {
     Write-Log -Message "Executing $($script.Name) ..."
-    try {
-        # Use the & call operator to execute the script
-        $collectorParams = Get-CollectorParameters -ScriptPath $script.FullName
-        Write-Log -Level "DEBUG" -Message "Executing command: $(Format-CollectorCommand -ScriptPath $script.FullName -Parameters $collectorParams)"
-        & $script.FullName @collectorParams
-        Write-Log -Message "$($script.Name) completed successfully."
-    }
-    catch {
-        Write-Log -Level "WARNING" -Message "Error executing $($script.Name): $_"
+    for ($attempt = 0; $attempt -le 3; $attempt++) {
+        try {
+            # Use the & call operator to execute the script
+            $collectorParams = Get-CollectorParameters -ScriptPath $script.FullName
+            Write-Log -Level "DEBUG" -Message "Executing command: $(Format-CollectorCommand -ScriptPath $script.FullName -Parameters $collectorParams)"
+            & $script.FullName @collectorParams
+            if (-not $?) { throw "Collector reported an unsuccessful execution." }
+            Write-Log -Message "$($script.Name) completed successfully."
+            break
+        }
+        catch {
+            Write-Log -Level "WARNING" -Message "Error executing $($script.Name): $_"
+            if ($attempt -lt 3) {
+                Write-Log -Level "WARNING" -Message "Waiting 30 seconds before retry $($attempt + 1)/3 for $($script.Name)."
+                Start-Sleep -Seconds 30
+            }
+        }
     }
 }
 

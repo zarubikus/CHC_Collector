@@ -167,6 +167,9 @@ Show help for master and selected collectors:
 - Live mode: when `-SourceRoot` is not provided
 - Writes artifacts under `registry/...`
 - Appends collected file metadata to shared `collected_files.csv`
+- Collects `NTUSER.DAT`, `UsrClass.dat`, their sidecar files, and `ntuser.ini` from user and service profiles. Live profiles use a temporary link to a shadow copy, with normal file collection as a fallback.
+- Failed registry file copies and `reg.exe save` exports wait 30 seconds before each of up to three retries (four attempts total). Failed exports then try copying the source hive.
+- The main runner also retries collectors that report unsuccessful execution or throw an error, with the same delay and limit.
 
 ### EVTX (`12_evtx.ps1`)
 
