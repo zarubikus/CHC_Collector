@@ -12,16 +12,22 @@ archives results into a ZIP package with SHA256 integrity metadata.
 - Normalized file index format across collectors (`collected_files.csv`)
 - SHA256 hashing for collected artifacts
 - Optional archive packaging and archive SHA256 output
+- Single offline EXE with PowerShell and BAT build launchers
 
 ## Repository Structure
 
 - `CHC_Collector.ps1`: Master script
+- `support/Build-CollectorExe.ps1`: Builds the offline EXE and its checksum
+- `support/Build-CollectorExe.bat`: Double-click launcher for the EXE build
+- `dist/CHC_Collector.exe`: Offline collector with all scripts bundled
+- `dist/CHC_Collector.SHA256`: Checksum for the EXE
 - `collectors/05_runtime.ps1`: Live runtime state (connections/processes JSON)
 - `collectors/06_winget.ps1`: Live installed software and available updates
 - `collectors/07_license.ps1`: Live Windows license and embedded OEM key state
 - `collectors/08_hardware.ps1`: Live hardware inventory and serial numbers
 - `collectors/10_registry.ps1`: Registry collection (offline or live)
 - `collectors/12_evtx.ps1`: Event log collection (offline or live)
+- `collectors/13_prefetch.ps1`: Prefetch artifact collection
 - `collectors/21_anydesk.ps1`: AnyDesk artifact collection
 
 ## Requirements
@@ -29,6 +35,42 @@ archives results into a ZIP package with SHA256 integrity metadata.
 - Windows PowerShell 5.1+ (or PowerShell with Windows networking/registry cmdlets)
 - Windows host access to required sources
 - Administrator rights recommended (required by default in master script)
+
+## Offline EXE
+
+Build a single EXE containing the master script and all current collector scripts:
+
+```powershell
+.\support\Build-CollectorExe.ps1
+```
+
+Or double-click `support\Build-CollectorExe.bat` to run the same build and keep the result window open. Building does not require Administrator access.
+
+To choose a build output folder, use either launcher from the repository folder:
+
+```powershell
+.\support\Build-CollectorExe.ps1 -Destination 'E:\Build Output'
+```
+
+```cmd
+support\Build-CollectorExe.bat -Destination "E:\Build Output"
+```
+
+The build creates `dist\CHC_Collector.exe` and `dist\CHC_Collector.SHA256`. It uses the installed x64 .NET Framework C# compiler; no package downloads are needed. Rebuild after changing collector scripts. Build files remain under `build/`, which is ignored by Git.
+
+Copy the EXE to the collection machine and run it. It requests Administrator access, displays progress, and reports the ZIP and SHA256 file paths. The EXE requires 64-bit Windows, .NET Framework 4.8 or later, and Windows PowerShell 5.1. Scripts are bundled; Windows utilities and optional tools such as WinGet must already be installed. Optional online checks still require network access.
+
+```powershell
+.\dist\CHC_Collector.exe
+.\dist\CHC_Collector.exe -Artifacts registry -SourceRoot 'D:\Mounted Image' -OutputRoot 'E:\Collections'
+.\dist\CHC_Collector.exe -Help
+```
+
+Existing master parameters are accepted, including comma-separated or multiple `-Artifacts` values and switches such as `-NoArchive`. Relative paths are resolved against the working folder. Default results and master logs go under `<working folder>\output`; if elevation starts in System32 or SysWOW64, the EXE's folder is used instead. Scripts are extracted to a unique temporary folder and removed when the collector exits; results remain outside that folder. An unwritable output or log folder stops the launch with a visible error.
+
+A double-click launch waits for a key before closing; terminal launches return normally. `-ShowLog` is enabled by default, and the EXE returns the collector process exit code. The initial build is unsigned.
+
+To verify a build with synthetic offline evidence, run `tests\exe.Tests.ps1`. It checks the embedded scripts, archive contents, hashes, output paths, failures, and temporary-folder cleanup. In a non-elevated session it uses a temporary test EXE with the same code and payload; the production EXE retains its Administrator manifest. Check the Administrator prompt and double-click console behavior manually on the target machine.
 
 ## Quick Start - Bootstrap script
 
