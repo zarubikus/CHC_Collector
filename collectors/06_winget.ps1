@@ -86,6 +86,8 @@ param (
 
 $SourceRootSpecified = $PSBoundParameters.ContainsKey("SourceRoot")
 
+Import-Module (Join-Path $PSScriptRoot 'CollectionMetadata.psm1') -Force
+
 function Show-WingetHelp {
     Write-Host @"
 06_winget.ps1
@@ -224,6 +226,13 @@ function Write-JsonFile {
     )
 
     Ensure-WingetOutputRoot
+    $collectionDate = ConvertTo-CollectionTimestamp
+    foreach ($record in @($Data)) {
+        if ($null -ne $record) {
+            $record | Add-Member -NotePropertyName CollectionDate -NotePropertyValue $collectionDate -Force
+            if ($record.PSObject.Properties.Name -contains "CollectionTime") { $record.CollectionTime = $collectionDate }
+        }
+    }
     ConvertTo-Json -InputObject $Data -Depth 12 | Set-Content -Path $Path -Encoding UTF8
 }
 
@@ -530,9 +539,9 @@ function Add-CollectedFileRecord {
         $collected = "Yes"
         try {
             $file = Get-Item -LiteralPath $DestinationPath -ErrorAction Stop
-            $fileCreated = $file.CreationTime
-            $fileModified = $file.LastWriteTime
-            $fileAccess = $file.LastAccessTime
+            $fileCreated = ConvertTo-CollectionTimestamp -Value $file.CreationTime
+            $fileModified = ConvertTo-CollectionTimestamp -Value $file.LastWriteTime
+            $fileAccess = ConvertTo-CollectionTimestamp -Value $file.LastAccessTime
             $size = $file.Length
             $attributes = $file.Attributes
         }
@@ -568,10 +577,12 @@ function Add-CollectedFileRecord {
         "Collected"          = $collected
         "Collection Method"  = $CollectionMethod
         "Message"            = $Message
+        "CollectionDate"     = ConvertTo-CollectionTimestamp
     }
 }
 
 function Export-CollectedFilesCsv {
+    Update-CollectionIndexSchema -Path $FilesCsvPath
     if ($CollectedFileRecords.Count -gt 0) {
         $recordsToWrite = @($CollectedFileRecords)
         if (Test-Path -LiteralPath $FilesCsvPath -PathType Leaf) {
@@ -650,7 +661,7 @@ else {
 $environment = [pscustomobject]@{
     Collector = "winget"
     MachineName = $MachineName
-    CollectionTime = (Get-Date).ToString("o")
+    CollectionTime = (ConvertTo-CollectionTimestamp)
     SourceRootSpecified = [bool]$SourceRootSpecified
     Force = [bool]$Force
     WingetExeAvailable = [bool]$wingetCommand

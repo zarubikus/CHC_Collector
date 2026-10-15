@@ -63,6 +63,8 @@ param (
 
 $SourceRootSpecified = $PSBoundParameters.ContainsKey("SourceRoot")
 
+Import-Module (Join-Path $PSScriptRoot 'CollectionMetadata.psm1') -Force
+
 function Show-RuntimeHelp {
     Write-Host @"
 05_runtime.ps1
@@ -175,21 +177,7 @@ if (-not (Test-Path -LiteralPath $RuntimeOutputRoot -PathType Container)) {
 
 function Convert-CimDateToIsoString {
     param ([object]$Value)
-
-    if ($null -eq $Value) {
-        return ""
-    }
-
-    try {
-        if ($Value -is [datetime]) {
-            return $Value.ToString("o")
-        }
-
-        return ([System.Management.ManagementDateTimeConverter]::ToDateTime([string]$Value)).ToString("o")
-    }
-    catch {
-        return [string]$Value
-    }
+    ConvertTo-CollectionTimestamp -Value $Value
 }
 
 function Get-ProcessOwnerInfo {
@@ -354,6 +342,7 @@ function Build-ProcessMap {
                 KernelModeTime = [string]$_.KernelModeTime
                 UserModeTime = [string]$_.UserModeTime
                 CreationDate = Convert-CimDateToIsoString -Value $_.CreationDate
+                CollectionDate = ConvertTo-CollectionTimestamp
                 Services = $services
             }
 
@@ -387,6 +376,7 @@ function Collect-Connections {
 
                 $records += [pscustomobject]@{
                     SourceType = "Runtime Network Connection"
+                    CollectionDate = ConvertTo-CollectionTimestamp
                     Protocol = "TCP"
                     LocalAddress = [string]$_.LocalAddress
                     LocalPort = [string]$_.LocalPort
@@ -394,7 +384,7 @@ function Collect-Connections {
                     RemotePort = [string]$_.RemotePort
                     State = [string]$_.State
                     AppliedSetting = [string]$_.AppliedSetting
-                    CreationTime = [string]$_.CreationTime
+                    CreationTime = ConvertTo-CollectionTimestamp -Value $_.CreationTime
                     OffloadState = [string]$_.OffloadState
                     OwningProcessId = $processIdValue
                     OwningProcess = $process
@@ -422,6 +412,7 @@ function Collect-Connections {
 
                 $records += [pscustomobject]@{
                     SourceType = "Runtime Network Connection"
+                    CollectionDate = ConvertTo-CollectionTimestamp
                     Protocol = "UDP"
                     LocalAddress = [string]$_.LocalAddress
                     LocalPort = [string]$_.LocalPort
@@ -429,7 +420,7 @@ function Collect-Connections {
                     RemotePort = ""
                     State = ""
                     AppliedSetting = ""
-                    CreationTime = [string]$_.CreationTime
+                    CreationTime = ConvertTo-CollectionTimestamp -Value $_.CreationTime
                     OffloadState = ""
                     OwningProcessId = $processIdValue
                     OwningProcess = $process
@@ -455,6 +446,13 @@ function Write-JsonFile {
         [object]$Data
     )
 
+    $collectionDate = ConvertTo-CollectionTimestamp
+    foreach ($record in @($Data)) {
+        if ($null -ne $record) {
+            $record | Add-Member -NotePropertyName CollectionDate -NotePropertyValue $collectionDate -Force
+            if ($record.PSObject.Properties.Name -contains "CollectionTime") { $record.CollectionTime = $collectionDate }
+        }
+    }
     $Data | ConvertTo-Json -Depth 10 | Set-Content -Path $Path -Encoding UTF8
 }
 
@@ -479,9 +477,9 @@ function Add-RuntimeFileRecord {
         $collected = "Yes"
         try {
             $file = Get-Item -LiteralPath $DestinationPath -ErrorAction Stop
-            $fileCreated = $file.CreationTime
-            $fileModified = $file.LastWriteTime
-            $fileAccess = $file.LastAccessTime
+            $fileCreated = ConvertTo-CollectionTimestamp -Value $file.CreationTime
+            $fileModified = ConvertTo-CollectionTimestamp -Value $file.LastWriteTime
+            $fileAccess = ConvertTo-CollectionTimestamp -Value $file.LastAccessTime
             $size = $file.Length
             $attributes = $file.Attributes
         }
@@ -517,10 +515,12 @@ function Add-RuntimeFileRecord {
         "Collected"          = $collected
         "Collection Method"  = $CollectionMethod
         "Message"            = $Message
+        "CollectionDate"     = ConvertTo-CollectionTimestamp
     }
 }
 
 function Export-RuntimeFilesCsv {
+    Update-CollectionIndexSchema -Path $RuntimeFilesCsvPath
     if ($RuntimeFileRecords.Count -gt 0) {
         $recordsToWrite = @($RuntimeFileRecords)
         if (Test-Path -LiteralPath $RuntimeFilesCsvPath -PathType Leaf) {

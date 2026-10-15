@@ -83,6 +83,8 @@ param (
 
 $SourceRootSpecified = $PSBoundParameters.ContainsKey("SourceRoot")
 
+Import-Module (Join-Path $PSScriptRoot 'CollectionMetadata.psm1') -Force
+
 function Show-HardwareHelp {
     Write-Host @"
 08_hardware.ps1
@@ -183,21 +185,7 @@ function Ensure-HardwareOutputRoot {
 
 function Convert-CimDateToIsoString {
     param ([object]$Value)
-
-    if ($null -eq $Value) {
-        return ""
-    }
-
-    try {
-        if ($Value -is [datetime]) {
-            return $Value.ToString("o")
-        }
-
-        return ([System.Management.ManagementDateTimeConverter]::ToDateTime([string]$Value)).ToString("o")
-    }
-    catch {
-        return [string]$Value
-    }
+    ConvertTo-CollectionTimestamp -Value $Value
 }
 
 function Get-CimData {
@@ -256,6 +244,13 @@ function Write-JsonFile {
     )
 
     Ensure-HardwareOutputRoot
+    $collectionDate = ConvertTo-CollectionTimestamp
+    foreach ($record in @($Data)) {
+        if ($null -ne $record) {
+            $record | Add-Member -NotePropertyName CollectionDate -NotePropertyValue $collectionDate -Force
+            if ($record.PSObject.Properties.Name -contains "CollectionTime") { $record.CollectionTime = $collectionDate }
+        }
+    }
     ConvertTo-Json -InputObject $Data -Depth 12 | Set-Content -Path $Path -Encoding UTF8
 }
 
@@ -280,9 +275,9 @@ function Add-CollectedFileRecord {
         $collected = "Yes"
         try {
             $file = Get-Item -LiteralPath $DestinationPath -ErrorAction Stop
-            $fileCreated = $file.CreationTime
-            $fileModified = $file.LastWriteTime
-            $fileAccess = $file.LastAccessTime
+            $fileCreated = ConvertTo-CollectionTimestamp -Value $file.CreationTime
+            $fileModified = ConvertTo-CollectionTimestamp -Value $file.LastWriteTime
+            $fileAccess = ConvertTo-CollectionTimestamp -Value $file.LastAccessTime
             $size = $file.Length
             $attributes = $file.Attributes
         }
@@ -318,10 +313,12 @@ function Add-CollectedFileRecord {
         "Collected"          = $collected
         "Collection Method"  = $CollectionMethod
         "Message"            = $Message
+        "CollectionDate"     = ConvertTo-CollectionTimestamp
     }
 }
 
 function Export-CollectedFilesCsv {
+    Update-CollectionIndexSchema -Path $FilesCsvPath
     if ($CollectedFileRecords.Count -gt 0) {
         $recordsToWrite = @($CollectedFileRecords)
         if (Test-Path -LiteralPath $FilesCsvPath -PathType Leaf) {
@@ -395,7 +392,7 @@ $tpm = @(Get-CimData -Namespace "root\CIMV2\Security\MicrosoftTpm" -ClassName Wi
 $report = [pscustomobject]@{
     Collector = "hardware"
     MachineName = $MachineName
-    CollectionTime = (Get-Date).ToString("o")
+    CollectionTime = (ConvertTo-CollectionTimestamp)
     SourceRootSpecified = [bool]$SourceRootSpecified
     Force = [bool]$Force
     ComputerSystem = @($computerSystem | ForEach-Object {

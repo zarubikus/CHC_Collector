@@ -376,6 +376,26 @@ function Format-CollectorCommand {
     return "& '$ScriptPath' $($parameterText -join ' ')"
 }
 
+function Update-CollectionIndexPaths {
+    $indexPath = Join-Path $CollectionOutputRoot "collected_files.csv"
+    if (-not (Test-Path -LiteralPath $indexPath -PathType Leaf)) { return }
+
+    $rootPrefix = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($CollectionOutputRoot).TrimEnd('\', '/') + '\'
+    $records = @(Import-Csv -LiteralPath $indexPath -ErrorAction Stop)
+    foreach ($record in $records) {
+        $destination = $record.'Destination Path'
+        if ($destination) {
+            $fullPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($destination)
+            if ($fullPath.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $record.'Destination Path' = $fullPath.Substring($rootPrefix.Length)
+            }
+        }
+    }
+    if ($records.Count -gt 0) {
+        $records | Export-Csv -LiteralPath $indexPath -NoTypeInformation -Encoding UTF8 -ErrorAction Stop
+    }
+}
+
 function Compress-CollectionOutput {
     if (-not (Test-Path -LiteralPath $CollectionOutputRoot -PathType Container)) {
         Write-Log -Level "WARNING" -Message "Collection output folder not found. Skipping archive: $CollectionOutputRoot"
@@ -387,7 +407,7 @@ function Compress-CollectionOutput {
         New-Item -ItemType Directory -Path $archiveParent -Force | Out-Null
     }
 
-    $archiveItems = @($CollectionOutputRoot)
+    $archiveItems = @(Get-ChildItem -LiteralPath $CollectionOutputRoot -Force | Select-Object -ExpandProperty FullName)
     if (Test-Path -LiteralPath $Log -PathType Leaf) {
         $archiveItems += $Log
     }
@@ -471,6 +491,8 @@ foreach ($script in $scriptFiles) {
 }
 
 Write-Log -Message "All scripts executed."
+
+Update-CollectionIndexPaths
 
 if ($NoArchive) {
     Write-Log -Message "NoArchive requested. Skipping archive creation and collection output cleanup."

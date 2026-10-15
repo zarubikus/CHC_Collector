@@ -75,6 +75,8 @@ param (
     [switch]$Help
 )
 
+Import-Module (Join-Path $PSScriptRoot 'CollectionMetadata.psm1') -Force
+
 function Show-EventLogsHelp {
     Write-Host @"
 20_eventlogs.ps1
@@ -191,7 +193,8 @@ $FileCsvColumns = @(
     "SHA256",
     "Collected",
     "Collection Method",
-    "Message"
+    "Message",
+    "CollectionDate"
 )
 function Write-Log {
     param (
@@ -255,15 +258,16 @@ function Add-EventLogFileRecord {
         "Source Type"        = $SourceType
         "Full Original Path" = $File.FullName
         "Destination Path"   = $DestinationPath
-        "File Created"       = $File.CreationTime
-        "File Modified"      = $File.LastWriteTime
-        "File Access"        = $File.LastAccessTime
+        "File Created"       = (ConvertTo-CollectionTimestamp -Value $File.CreationTime)
+        "File Modified"      = (ConvertTo-CollectionTimestamp -Value $File.LastWriteTime)
+        "File Access"        = (ConvertTo-CollectionTimestamp -Value $File.LastAccessTime)
         "Size"               = $File.Length
         "Attributes"         = $File.Attributes
         "SHA256"             = $SHA256
         "Collected"          = $Collected
         "Collection Method"  = $CollectionMethod
         "Message"            = $Message
+        "CollectionDate"     = ConvertTo-CollectionTimestamp
     }
 }
 
@@ -459,7 +463,8 @@ function Add-LiveEventLogRecord {
         "Record Count"    = $RecordCount
         "SHA256"          = $SHA256
         "Collected"       = $Collected
-        "Message"         = $Message
+        "Message"            = $Message
+        "CollectionDate"     = ConvertTo-CollectionTimestamp
     }
 
     if ([string]::IsNullOrWhiteSpace($OriginalPath)) {
@@ -474,9 +479,9 @@ function Add-LiveEventLogRecord {
     if (Test-Path -LiteralPath $DestinationPath -PathType Leaf) {
         try {
             $destinationFile = Get-Item -LiteralPath $DestinationPath -Force -ErrorAction Stop
-            $fileCreated = $destinationFile.CreationTime
-            $fileModified = $destinationFile.LastWriteTime
-            $fileAccess = $destinationFile.LastAccessTime
+            $fileCreated = ConvertTo-CollectionTimestamp -Value $destinationFile.CreationTime
+            $fileModified = ConvertTo-CollectionTimestamp -Value $destinationFile.LastWriteTime
+            $fileAccess = ConvertTo-CollectionTimestamp -Value $destinationFile.LastAccessTime
             $size = $destinationFile.Length
             $attributes = $destinationFile.Attributes
         }
@@ -499,6 +504,7 @@ function Add-LiveEventLogRecord {
         "Collected"          = $Collected
         "Collection Method"  = $CollectionMethod
         "Message"            = $recordMessage
+        "CollectionDate"     = ConvertTo-CollectionTimestamp
     }
 }
 
@@ -640,6 +646,7 @@ function Export-LiveEventLogs {
 }
 
 function Export-EventLogsCsv {
+    Update-CollectionIndexSchema -Path $FileCsvPath
     if ($CollectedFileRecords.Count -gt 0) {
         $recordsToWrite = @($CollectedFileRecords)
         if (Test-Path -LiteralPath $FileCsvPath -PathType Leaf) {

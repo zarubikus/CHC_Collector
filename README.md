@@ -42,6 +42,7 @@ when run on a Windows host; optional online checks require network access.
 - `collectors/12_evtx.ps1`: Event log collection (offline or live)
 - `collectors/13_prefetch.ps1`: Prefetch artifact collection
 - `collectors/21_anydesk.ps1`: AnyDesk artifact collection
+- `collectors/CollectionMetadata.psm1`: Shared timestamp formatting and index schema validation
 
 ## Requirements
 
@@ -51,7 +52,7 @@ when run on a Windows host; optional online checks require network access.
 
 ## Offline EXE
 
-Build a single EXE containing the master script and all current collector scripts:
+Build a single EXE containing the master script, all current collector scripts, and their shared metadata module:
 
 ```powershell
 .\support\Build-CollectorExe.ps1
@@ -266,9 +267,11 @@ If archiving is enabled (default):
 
 Collectors use a common schema for `collected_files.csv`:
 
+The master places the collection contents directly at the ZIP root, alongside the master log.
+
 - `Source Type`
 - `Full Original Path`
-- `Destination Path`
+- `Destination Path` (relative to the collection/ZIP root, e.g. `runtime\connections.json`, when run through the master collector)
 - `File Created`
 - `File Modified`
 - `File Access`
@@ -278,6 +281,105 @@ Collectors use a common schema for `collected_files.csv`:
 - `Collected`
 - `Collection Method`
 - `Message`
+- `CollectionDate`
+
+Every new index row (including unsuccessful collection attempts) has a `CollectionDate`.
+
+### Timestamp Format and Meaning
+
+All four live inventory plugins (`runtime`, `winget`, `license`, `hardware`) also add
+`CollectionDate` to each top-level JSON record/report. Runtime process records retain
+their collection timestamp when embedded in a connection's `OwningProcess`.
+The existing report field `CollectionTime` remains as an alias of `CollectionDate`.
+
+Collector-generated timestamps use `yyyy-MM-ddTHH:mm:ss.fffffffzzz`, for example
+`2026-09-30T21:03:52.6428650+08:00`: seven fractional second digits and an explicit
+UTC offset. New collection timestamps use the collecting host's local offset;
+existing offset-aware source values retain their offset. `+08:00` applies on a host
+configured for that timezone; it is not imposed on evidence from other timezones.
+Missing source timestamps remain empty. Unparseable source timestamps produce a
+warning and an empty value rather than an incorrectly formatted timestamp.
+
+| Field | Meaning |
+| --- | --- |
+| Connection `CreationTime` | When Windows created the TCP connection or UDP endpoint. |
+| Process `CreationDate` | When the process started. Appears in `runtime/processes.json` and a connection's nested `OwningProcess`. |
+| `CollectionDate` | When the collector observed a record or recorded a file collection attempt. |
+| Report `CollectionTime` | Compatibility alias of the report's `CollectionDate`. |
+| Index `File Created`, `File Modified`, `File Access` | Filesystem metadata, using the same timestamp format. These describe source files for copied evidence and generated files for live reports/exports. |
+
+Creation and collection timestamps describe different events. A process can start
+before its connection is created, and both events can precede collection.
+
+### Old and New Output Schemas
+
+| Output | Old schema | New schema |
+| --- | --- | --- |
+| Live inventory JSON | `CollectionDate` may be absent; some reports have `CollectionTime`. | Each top-level record/report has `CollectionDate`; existing report `CollectionTime` remains available. |
+| Connection `CreationTime` | Locale-dependent text, e.g. `10/02/2026 09:15:49`. | ISO 8601 with seven fractional digits and an explicit UTC offset. |
+| Index file timestamps | Locale-dependent date/time text. | The same ISO 8601 format. |
+| `collected_files.csv` | 12 columns, ending with `Message`. | 13 columns, with `CollectionDate` appended after `Message`. |
+
+JSON report/object and inventory array shapes remain unchanged. Missing source
+timestamps can still be empty; adding `CollectionDate` does not supply a missing
+creation time.
+
+Downstream parsers should:
+
+- Read CSV columns by name, allowing an absent `CollectionDate` in old collections.
+- Prefer `CollectionDate`, fall back to report `CollectionTime` when available,
+  and otherwise represent collection time as unknown. Creation/file timestamps
+  must not be used as substitutes for collection time.
+- Preserve UTC offsets and seven-digit fractional precision, or explicitly retain
+  the original timestamp string if the parser's datetime type has lower precision.
+- Handle absent, null, and empty timestamp fields, including nested process records.
+- Parse legacy dates using known source locale information. A value such as
+  `10/02/2026` is ambiguous without that context; do not silently guess its date
+  order or timezone.
+- Keep installer date-only values and CPU durations distinct from full timestamps.
+
+### Upgrading an Existing Collection
+
+Use a fresh output collection when upgrading: a historical index without
+`CollectionDate` (or with an unknown collection timestamp) is rejected before
+appending, so columns cannot become misaligned and historical times are not invented.
+Existing output archives are not rewritten.
+
+Choose a new output root to avoid appending to a previous collection:
+
+```powershell
+.\dist\CHC_Collector.exe -OutputRoot 'E:\Collections\NewTimestampSchema'
+```
+
+Keep `collectors/CollectionMetadata.psm1` alongside the collector scripts when
+copying the script distribution. The EXE bundles this module automatically;
+rebuild the EXE after changing the module or collector scripts.
+
+### Other Timestamp Formats
+
+The timestamp audit identified these formats that retain their original representation:
+
+| Location | Representation |
+| --- | --- |
+| Software registry `InstallDate` | Typically date-only `yyyyMMdd`, supplied by the installer; no precise time or timezone is available. |
+| Collector/master log prefixes | `yyyy-MM-dd HH:mm:ss`. |
+| Output folder/archive names | `yyyyMMdd`. |
+| Raw WinGet output and copied evidence | Source-specific formats inside registry hives, event logs, Prefetch, and AnyDesk logs; artifact contents are preserved. |
+
+Runtime process `KernelModeTime` and `UserModeTime` are cumulative CPU durations,
+not calendar timestamps.
+
+### Timestamp Verification
+
+Run the synthetic timestamp checks without querying live processes or connections:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\timestamps.Tests.ps1
+```
+
+The checks cover all eight collectors' index rows, failed collection attempts,
+runtime JSON timestamps, TCP/UDP creation times, nested processes, UTC offsets,
+fractional precision, culture independence, and legacy index schema protection.
 
 ## Notes
 

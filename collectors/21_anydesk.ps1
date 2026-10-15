@@ -73,6 +73,8 @@ param (
     [switch]$Help
 )
 
+Import-Module (Join-Path $PSScriptRoot 'CollectionMetadata.psm1') -Force
+
 function Show-AnyDeskHelp {
     Write-Host @"
 21_anydesk.ps1
@@ -181,7 +183,8 @@ $CsvColumns = @(
     "SHA256",
     "Collected",
     "Collection Method",
-    "Message"
+    "Message",
+    "CollectionDate"
 )
 
 function Write-Log {
@@ -272,15 +275,16 @@ function Add-AnyDeskFileRecord {
         "Source Type"        = "AnyDesk File"
         "Full Original Path" = $File.FullName
         "Destination Path"   = $DestinationPath
-        "File Created"       = $File.CreationTime
-        "File Modified"      = $File.LastWriteTime
-        "File Access"        = $File.LastAccessTime
+        "File Created"       = (ConvertTo-CollectionTimestamp -Value $File.CreationTime)
+        "File Modified"      = (ConvertTo-CollectionTimestamp -Value $File.LastWriteTime)
+        "File Access"        = (ConvertTo-CollectionTimestamp -Value $File.LastAccessTime)
         "Size"               = $File.Length
         "Attributes"         = $File.Attributes
         "SHA256"             = $SHA256
         "Collected"          = $Collected
         "Collection Method"  = $CollectionMethod
         "Message"            = $Message
+        "CollectionDate"     = ConvertTo-CollectionTimestamp
     }
 }
 
@@ -346,6 +350,7 @@ function Copy-AnyDeskLogs {
 }
 
 function Export-AnyDeskCsv {
+    Update-CollectionIndexSchema -Path $CsvPath
     $csvExistsWithData = (Test-Path -LiteralPath $CsvPath -PathType Leaf) -and ((Get-Item -LiteralPath $CsvPath).Length -gt 0)
 
     if ($CollectedFileRecords.Count -gt 0) {
